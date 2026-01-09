@@ -47,7 +47,16 @@ private:
 
 public:
   unsigned id;
+  
+  /// Logical address visible to the symbolically executed program.
+  /// For symbolic reasoning and pointer expressions.
   uintptr_t address;
+  
+  /// Host-mapped backing store address (0 if none allocated).
+  /// Used for actual memory operations (memcpy, malloc/free backing).
+  /// For fixed objects: hostAddress == address (preserve previous semantics).
+  /// For non-fixed objects: hostAddress is the malloc/kdalloc result.
+  uintptr_t hostAddress;
 
   /// size in bytes
   size_t size;
@@ -77,6 +86,7 @@ public:
   MemoryObject(uint64_t _address) 
     : id(counter++),
       address(_address),
+      hostAddress(_address),
       size(0),
       alignment(0),
       isFixed(true),
@@ -90,6 +100,7 @@ public:
                MemoryManager *_parent)
     : id(counter++),
       address(_address),
+      hostAddress(0), // Will be set by allocate/allocateFixed
       size(_size),
       alignment(_alignment),
       name("unnamed"),

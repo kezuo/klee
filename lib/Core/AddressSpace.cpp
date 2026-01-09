@@ -314,7 +314,7 @@ std::size_t AddressSpace::copyOutConcretes() {
 
 void AddressSpace::copyOutConcrete(const MemoryObject *mo,
                                    const ObjectState *os) const {
-  auto address = reinterpret_cast<std::uint8_t *>(mo->address);
+  auto address = reinterpret_cast<std::uint8_t *>(mo->hostAddress);
   std::memcpy(address, os->concreteStore, mo->size);
 }
 
@@ -325,7 +325,7 @@ bool AddressSpace::copyInConcretes(bool concretize) {
     if (!mo->isUserSpecified) {
       const auto &os = obj.second;
 
-      if (!copyInConcrete(mo, os.get(), mo->address, concretize))
+      if (!copyInConcrete(mo, os.get(), mo->hostAddress, concretize))
         return false;
     }
   }
