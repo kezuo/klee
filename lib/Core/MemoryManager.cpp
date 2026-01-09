@@ -386,6 +386,7 @@ size_t MemoryManager::getUsedDeterministicSize() {
 }
 
 uintptr_t MemoryManager::findFreeLogicalAddress(uint64_t size, size_t alignment) {
+  // Note: alignment is validated to be a power of 2 by the caller (allocate())
   // Align the next logical address to the requested alignment
   uintptr_t alignedAddress = nextLogicalAddress;
   if (alignment > 0) {
@@ -394,6 +395,9 @@ uintptr_t MemoryManager::findFreeLogicalAddress(uint64_t size, size_t alignment)
   }
   
   // Check for overlaps with existing fixed objects
+  // This is a linear search which is acceptable for typical use cases where
+  // the number of fixed objects is small. If performance becomes an issue,
+  // consider using a spatial data structure or interval tree.
   bool foundFree = false;
   while (!foundFree) {
     foundFree = true;
@@ -404,8 +408,9 @@ uintptr_t MemoryManager::findFreeLogicalAddress(uint64_t size, size_t alignment)
       if (mo->isFixed) {
         // Check if [alignedAddress, alignedAddress+size) overlaps with
         // [mo->address, mo->address+mo->size)
-        if (!(alignedAddress + size <= mo->address || 
-              alignedAddress >= mo->address + mo->size)) {
+        // Two ranges overlap if: start1 < end2 AND start2 < end1
+        if (alignedAddress < mo->address + mo->size && 
+            mo->address < alignedAddress + size) {
           // Overlap detected, move past this fixed object
           alignedAddress = mo->address + mo->size;
           // Re-align
