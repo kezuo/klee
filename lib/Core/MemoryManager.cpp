@@ -130,7 +130,7 @@ llvm::cl::opt<bool> NullOnZeroMalloc(
 
 /***/
 MemoryManager::MemoryManager(ArrayCache *_arrayCache)
-    : arrayCache(_arrayCache) {
+    : arrayCache(_arrayCache), nextLogicalAddress(logicalRegionBase) {
   if (DeterministicAllocation) {
     if (DeterministicAllocationQuarantineSize ==
         kdalloc::Allocator::unlimitedQuarantine) {
@@ -260,8 +260,8 @@ MemoryManager::MemoryManager(ArrayCache *_arrayCache)
 MemoryManager::~MemoryManager() {
   while (!objects.empty()) {
     MemoryObject *mo = *objects.begin();
-    if (!mo->isFixed && !DeterministicAllocation)
-      free((void *)mo->address);
+    if (!mo->isFixed && !DeterministicAllocation && mo->hostAddress != 0)
+      free((void *)mo->hostAddress);
     objects.erase(mo);
     delete mo;
   }
@@ -286,7 +286,7 @@ MemoryObject *MemoryManager::allocate(uint64_t size, bool isLocal,
     return 0;
   }
 
-  uint64_t address = 0;
+  uint64_t hostAddress = 0;
   if (DeterministicAllocation) {
     void *allocAddress;
 
@@ -310,26 +310,30 @@ MemoryObject *MemoryManager::allocate(uint64_t size, bool isLocal,
       }
     }
 
-    address = reinterpret_cast<std::uint64_t>(allocAddress);
+    hostAddress = reinterpret_cast<std::uint64_t>(allocAddress);
   } else {
     // Use malloc for the standard case
     if (alignment <= 8)
-      address = (uint64_t)malloc(size);
+      hostAddress = (uint64_t)malloc(size);
     else {
-      int res = posix_memalign((void **)&address, alignment, size);
+      int res = posix_memalign((void **)&hostAddress, alignment, size);
       if (res < 0) {
         klee_warning("Allocating aligned memory failed.");
-        address = 0;
+        hostAddress = 0;
       }
     }
   }
 
-  if (!address)
+  if (!hostAddress)
     return 0;
 
+  // Allocate a logical address that doesn't overlap with any fixed objects
+  uint64_t logicalAddress = findFreeLogicalAddress(size, alignment);
+
   ++stats::allocations;
-  MemoryObject *res = new MemoryObject(address, size, alignment, isLocal,
+  MemoryObject *res = new MemoryObject(logicalAddress, size, alignment, isLocal,
                                        isGlobal, false, allocSite, this);
+  res->hostAddress = hostAddress;
   objects.insert(res);
   return res;
 }
@@ -348,14 +352,16 @@ MemoryObject *MemoryManager::allocateFixed(uint64_t address, uint64_t size,
   ++stats::allocations;
   MemoryObject *res =
       new MemoryObject(address, size, 0, false, true, true, allocSite, this);
+  // For fixed objects, both logical address and host address are the same
+  res->hostAddress = address;
   objects.insert(res);
   return res;
 }
 
 void MemoryManager::markFreed(MemoryObject *mo) {
   if (objects.find(mo) != objects.end()) {
-    if (!mo->isFixed && !DeterministicAllocation)
-      free((void *)mo->address);
+    if (!mo->isFixed && !DeterministicAllocation && mo->hostAddress != 0)
+      free((void *)mo->hostAddress);
     objects.erase(mo);
   }
 }
@@ -377,4 +383,50 @@ bool MemoryManager::markMappingsAsUnneeded() {
 size_t MemoryManager::getUsedDeterministicSize() {
   // TODO: implement
   return 0;
+}
+
+uintptr_t MemoryManager::findFreeLogicalAddress(uint64_t size, size_t alignment) {
+  // Note: alignment is validated to be a power of 2 by the caller (allocate())
+  // Align the next logical address to the requested alignment
+  uintptr_t alignedAddress = nextLogicalAddress;
+  if (alignment > 0) {
+    uintptr_t mask = alignment - 1;
+    alignedAddress = (alignedAddress + mask) & ~mask;
+  }
+  
+  // Check for overlaps with existing fixed objects
+  // This is a linear search which is acceptable for typical use cases where
+  // the number of fixed objects is small. If performance becomes an issue,
+  // consider using a spatial data structure or interval tree.
+  bool foundFree = false;
+  while (!foundFree) {
+    foundFree = true;
+    
+    for (objects_ty::iterator it = objects.begin(), ie = objects.end(); 
+         it != ie; ++it) {
+      MemoryObject *mo = *it;
+      if (mo->isFixed) {
+        // Check if [alignedAddress, alignedAddress+size) overlaps with
+        // [mo->address, mo->address+mo->size)
+        // Two ranges overlap if: start1 < end2 AND start2 < end1
+        if (alignedAddress < mo->address + mo->size && 
+            mo->address < alignedAddress + size) {
+          // Overlap detected, move past this fixed object
+          alignedAddress = mo->address + mo->size;
+          // Re-align
+          if (alignment > 0) {
+            uintptr_t mask = alignment - 1;
+            alignedAddress = (alignedAddress + mask) & ~mask;
+          }
+          foundFree = false;
+          break;
+        }
+      }
+    }
+  }
+  
+  // Update nextLogicalAddress for next allocation
+  nextLogicalAddress = alignedAddress + size;
+  
+  return alignedAddress;
 }

@@ -36,6 +36,11 @@ private:
 
   kdalloc::AllocatorFactory constantsFactory;
   kdalloc::Allocator constantsAllocator;
+  
+  /// Logical address allocation state.
+  /// Ensures non-fixed objects get logical addresses that don't overlap with fixed objects.
+  uintptr_t nextLogicalAddress;
+  static const uintptr_t logicalRegionBase = 0x100000000ULL; // Start at 4GB
 
 public:
   explicit MemoryManager(ArrayCache *arrayCache);
@@ -62,6 +67,10 @@ public:
   void markFreed(MemoryObject *mo);
   bool markMappingsAsUnneeded();
   ArrayCache *getArrayCache() const { return arrayCache; }
+  
+  /// Find a logical address range that doesn't overlap with any fixed objects.
+  /// Returns the logical address for the allocation.
+  uintptr_t findFreeLogicalAddress(uint64_t size, size_t alignment);
 
   /*
    * Returns the size used by deterministic allocation in bytes
