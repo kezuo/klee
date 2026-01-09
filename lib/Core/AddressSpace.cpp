@@ -18,6 +18,8 @@
 
 #include "CoreStats.h"
 
+#include <cassert>
+
 using namespace klee;
 
 ///
@@ -324,6 +326,10 @@ bool AddressSpace::copyInConcretes(bool concretize) {
 
     if (!mo->isUserSpecified) {
       const auto &os = obj.second;
+      
+      // hostAddress should always be valid for non-user-specified objects
+      // since allocation returns NULL on failure
+      assert(mo->hostAddress != 0 && "Invalid hostAddress for non-user-specified object");
 
       if (!copyInConcrete(mo, os.get(), mo->hostAddress, concretize))
         return false;
